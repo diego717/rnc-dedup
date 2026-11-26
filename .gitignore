@@ -1,0 +1,15 @@
+# Se regeneran con los scripts
+datos/
+resultados/
+*.csv
+!requirements.txt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Sistema
+.DS_Store
+Thumbs.db
