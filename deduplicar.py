@@ -30,6 +30,7 @@ from splink import Linker, SettingsCreator, block_on
 from splink.backends.duckdb import DuckDBAPI
 
 from generar_sinteticos import cedula_valida
+from informe_pesos import generar as generar_informe_pesos
 
 
 # ---------------------------------------------------------------- normalización
@@ -107,6 +108,8 @@ def configurar() -> SettingsCreator:
             block_on("apellido2", "fecha_nacimiento"),
             block_on("nombre1", "fecha_nacimiento"),
             block_on("fecha_nacimiento", "departamento"),
+            block_on("nombre1", "apellido1"),
+            block_on("apellido1", "apellido2"),
         ],
         retain_intermediate_calculation_columns=False,
         additional_columns_to_retain=["fuente"],
@@ -123,6 +126,31 @@ def entrenar(linker: Linker) -> None:
         block_on("cedula"))
     linker.training.estimate_parameters_using_expectation_maximisation(
         block_on("nombre1", "apellido1"))
+
+
+PESO_MINIMO = -8.0  # log2(m/u): ninguna diferencia sola resta más que esto
+
+
+def limitar_pesos(linker: Linker, sdf, minimo: float = PESO_MINIMO) -> tuple[Linker, list[str]]:
+    """Evita que una sola diferencia vete una unión.
+
+    Cuando un nivel casi no aparece entre registros de la misma persona, el EM
+    le asigna un m cercano a 0 y un peso negativo enorme (p.ej. -300). Con datos
+    reales eso separaría casos por un dígito mal tipeado. Acá se sube m lo justo
+    para que el peso no baje de `minimo`."""
+    import math
+    modelo = linker.misc.save_model_to_json()
+    ajustes = []
+    for comp in modelo["comparisons"]:
+        for nivel in comp["comparison_levels"]:
+            m, u = nivel.get("m_probability"), nivel.get("u_probability")
+            if nivel.get("is_null_level") or m is None or u is None:
+                continue
+            if m <= 0 or math.log2(m / u) < minimo - 1e-6:
+                antes = "-inf" if m <= 0 else f"{math.log2(m / u):.1f}"
+                nivel["m_probability"] = u * 2 ** minimo
+                ajustes.append(f"{comp['output_column_name']} / {nivel['label_for_charts']}: {antes} -> {minimo}")
+    return Linker(sdf, modelo, log_level=30), ajustes
 
 
 # ---------------------------------------------------------------- calidad
@@ -230,6 +258,9 @@ def main() -> None:
     sdf = db.register(df)
     linker = Linker(sdf, configurar(), log_level=30)
     entrenar(linker)
+    linker, ajustes = limitar_pesos(linker, sdf)
+    for a_ in ajustes:
+        print("Peso limitado:", a_)
 
     pred = linker.inference.predict(threshold_match_probability=a.umbral_revision)
     clusters = linker.clustering.cluster_pairwise_predictions_at_threshold(
@@ -252,14 +283,12 @@ def main() -> None:
     casos.to_csv(a.salida / "registros_con_caso.csv", index=False)
 
     linker.misc.save_model_to_json(str(a.salida / "modelo.json"), overwrite=True)
-    try:
-        linker.visualisations.match_weights_chart().save(str(a.salida / "pesos_modelo.html"))
-    except Exception as e:  # el gráfico es opcional
-        print("No se pudo guardar el gráfico de pesos:", e)
+    generar_informe_pesos(a.salida / "modelo.json", a.salida / "pesos_modelo.html", PESO_MINIMO)
 
     resumen = {"indicadores_calidad": indicadores(df, clusters),
                "pares_en_revision": int(len(dud)),
-               "umbral_union_automatica": a.umbral}
+               "umbral_union_automatica": a.umbral,
+               "pesos_limitados": ajustes}
     if a.verdad.exists():
         resumen["evaluacion"] = evaluar(clusters, pd.read_csv(a.verdad), df, dud)
     (a.salida / "resumen.json").write_text(json.dumps(resumen, indent=2, ensure_ascii=False))

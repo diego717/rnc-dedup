@@ -104,6 +104,21 @@ def error_cedula(ci: str, rng: random.Random) -> str:
     return ci[:i] + str(rng.randint(0, 9)) + ci[i + 1:]
 
 
+def error_fecha(f: str, rng: random.Random) -> str:
+    """Cambia un dígito de la fecha (tipeo), manteniendo una fecha válida."""
+    for _ in range(20):
+        pos = rng.choice([2, 3, 5, 6, 8, 9])  # dígitos de año (decena/unidad), mes y día
+        nueva = f[:pos] + str(rng.randint(0, 9)) + f[pos + 1:]
+        if nueva == f:
+            continue
+        try:
+            date.fromisoformat(nueva)
+            return nueva
+        except ValueError:
+            continue
+    return f
+
+
 def fmt_fecha(d: date) -> str:
     return d.isoformat()
 
@@ -115,6 +130,8 @@ def corromper(reg: dict, rng: random.Random, nivel: float) -> dict:
         r["nombre1"] = r["nombre1"].translate(SIN_TILDE).upper()
     if rng.random() < 0.12 * nivel:
         r["apellido1"] = tipeo(r["apellido1"], rng)
+    if rng.random() < 0.08 * nivel and r["apellido2"]:
+        r["apellido2"] = tipeo(r["apellido2"], rng)
     if rng.random() < 0.10 * nivel:
         r["nombre1"] = tipeo(r["nombre1"], rng)
     if rng.random() < 0.30 * nivel:
@@ -132,9 +149,17 @@ def corromper(reg: dict, rng: random.Random, nivel: float) -> dict:
         if d.day <= 12:
             r["fecha_nacimiento"] = fmt_fecha(date(d.year, d.day, d.month))
     elif rng.random() < 0.04 * nivel:
+        r["fecha_nacimiento"] = error_fecha(r["fecha_nacimiento"], rng)
+    elif rng.random() < 0.04 * nivel:
         r["fecha_nacimiento"] = ""
     if rng.random() < 0.06 * nivel:
         r["departamento"] = ""
+    elif rng.random() < 0.05 * nivel:  # se mudó, o la fuente registra otro domicilio
+        r["departamento"] = rng.choice([d for d in DEPARTAMENTOS if d != r["departamento"]])
+    if rng.random() < 0.06 * nivel:
+        r["lateralidad"] = ""
+    elif rng.random() < 0.02 * nivel:
+        r["lateralidad"] = "Izquierda" if r["lateralidad"] == "Derecha" else "Derecha"
     return r
 
 
